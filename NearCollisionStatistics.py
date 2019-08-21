@@ -17,13 +17,13 @@ def time_to_CPA_calculator(whole_table,
                             "Time": "Time",
                             "COG": "COG",
                             "SOG": "SOG",
-                            "Heading": "Heading",
                             "LON": "LON",
                             "LAT": "LAT",
                             "Status": "Status",
                             "Length": "Length",
                             "Interval": "Interval",
-                            "Distances": "Distances"},
+                            "Distances": "Distances",
+                            "Day": "Day"},
                 intervalcol=False,
                 extrainterval=False):
     """
@@ -57,6 +57,8 @@ def time_to_CPA_calculator(whole_table,
     else:
         namedict["Interval"] = intervalcol
 
+    day_coll = np.array(whole_table[namedict["Day"]])[1]
+
     # Setting minimum tolerance for close-to-zero bool tests
     # and meters to degree conversion constant
     TOL = 1E-7
@@ -66,8 +68,8 @@ def time_to_CPA_calculator(whole_table,
     # second enables us to break loops further down
     whole_table = whole_table.sort_values(
                                 by=[namedict["Interval"],
-                                    namedict["LON"],
-                                    namedict["LAT"]], 
+                                    namedict["LAT"],
+                                    namedict["LON"]], 
                                 axis=0, 
                                 inplace=False)
 
@@ -146,6 +148,8 @@ def time_to_CPA_calculator(whole_table,
     Time_to_CPA = outmatrix[2][zeros_mask]
     CPA_dist = outmatrix[3][zeros_mask]*METERS_DEGREES_CONVERSION
 
+    Day_array = np.ones(len(ID_V1),dtype = np.uint32)*day_coll
+
     # Creating output object as dataframe
     outdataframe = pd.DataFrame(data = 
                                 {"ID_Vessel_1":     ID_V1,
@@ -165,7 +169,8 @@ def time_to_CPA_calculator(whole_table,
                                 "Length_Vessel_2":  Length_V2,
                                 "Status_Vessel_2":  Status_V2,
                                 "Min_time_to_CPA":  Time_to_CPA,
-                                "CPA":              CPA_dist}, 
+                                "CPA":              CPA_dist,
+                                "Day":              Day_array}, 
                         columns = ["ID_Vessel_1",
                                 "Time_Vessel_1",
                                 "LON_Vessel_1",
@@ -183,7 +188,25 @@ def time_to_CPA_calculator(whole_table,
                                 "Length_Vessel_2",
                                 "Status_Vessel_2" ,
                                 "Min_time_to_CPA",
-                                "CPA"])
+                                "CPA",
+                                "Day"])
+
+
+    SOG_tresh_min = 5
+    SOG_tresh_max = 50
+    filter3 = (((outdataframe["SOG_Vessel_1"]>SOG_tresh_min)&(outdataframe["SOG_Vessel_2"]>SOG_tresh_min))
+            &((outdataframe["SOG_Vessel_1"]<SOG_tresh_max)&(outdataframe["SOG_Vessel_2"]<SOG_tresh_max))
+            &((outdataframe["Status_Vessel_1"] != 11)&(outdataframe["Status_Vessel_1"] != 12))
+            &((outdataframe["Status_Vessel_2"] != 11)&(outdataframe["Status_Vessel_2"] != 12))
+            &(outdataframe["Min_time_to_CPA"] < 1000)&(outdataframe["CPA"] < 1000))
+
+    # Filtering:
+
+    outdataframe = outdataframe[filter3]
+
+    outdataframe = outdataframe.sort_values(["Min_time_to_CPA"])
+    outdataframe = outdataframe.drop_duplicates(["ID_Vessel_1","ID_Vessel_2"])
+    outdataframe = outdataframe.sort_values(["Min_time_to_CPA"])
 
     return outdataframe
 
@@ -233,170 +256,175 @@ def _CPA_calculator_workhorse(IDs, LATs, LONs, DateTimes,
     # Iterating over intervals for interval-wise calculations
     # (written to be implemented with parallellism)
     for interval in numba.prange(first_interval,
-                        first_interval + len(interval_numbers)):
+                        first_interval + max(interval_numbers)):
 
         # Calculating interval size
         interval_start = np.uint32(np.sum(Intervals < interval))
         interval_size = np.uint32(np.sum(Intervals == interval))
 
-        if extrainterval == True:
-            interval_next_size = np.uint32(np.sum(Intervals == interval + 1))
+        if interval_size == 0:
+            pass
+            
         else:
-            interval_next_size = 0
 
-        long_interval_size = interval_size + interval_next_size
+            if extrainterval == True:
+                interval_next_size = np.uint32(np.sum(Intervals == interval + 1))
+            else:
+                interval_next_size = 0
 
-        for record_index1 in range(interval_start,interval_start 
-                                                    + interval_size):
+            long_interval_size = interval_size + interval_next_size
 
-            # If ship is not already checked, we establish speed, angle,
-            # LON and LAT for ship 1
-            ship1_lon = LONs[record_index1]
-            ship1_lat = LATs[record_index1]
-            ship1_pos = np.array([ship1_lon, ship1_lat],
-                                    dtype=np.float32)
-            speed1 = SOGs[record_index1]
-            angle1 = COGs[record_index1]
+            for record_index1 in range(interval_start,interval_start 
+                                                        + interval_size):
 
-            # Creating arrays for storing CPA_distance and time to
-            # CPA for 1he iteration over ship 1
-            CPA_ship_1 = np.zeros(long_interval_size, dtype = np.float32)
-            tCPA_ship_1 = np.zeros(long_interval_size, dtype = np.float32)
+                # If ship is not already checked, we establish speed, angle,
+                # LON and LAT for ship 1
+                ship1_lon = LONs[record_index1]
+                ship1_lat = LATs[record_index1]
+                ship1_pos = np.array([ship1_lon, ship1_lat],
+                                        dtype=np.float32)
+                speed1 = SOGs[record_index1]
+                angle1 = COGs[record_index1]
 
-            # Iterating from ship 1 to end of interval to calculate
-            # time to CPA to all other (relevant) ships
-            for record_index2 in range(record_index1+1, interval_start 
-                                                        + long_interval_size):
+                # Creating arrays for storing CPA_distance and time to
+                # CPA for 1he iteration over ship 1
+                CPA_ship_1 = np.zeros(long_interval_size, dtype = np.float32)
+                tCPA_ship_1 = np.zeros(long_interval_size, dtype = np.float32)
 
-                # Using the fact that the table is sorted by Longitudes to
-                # break the loop if we have passed by the relevant LON area.
-                # Passing smaller lons
-                if (LATs[record_index2] > ship1_lat + DIST_MIN):
-                    break
-                elif (LATs[record_index2] < ship1_lat - DIST_MIN):
-                    pass
-                else:
-                    # Creating interval index for ship 2
-                    # Establishing LON and LAT for ship 2
-                    ship2_lon = LONs[record_index2]
-                    ship2_lat = LATs[record_index2]
+                # Iterating from ship 1 to end of interval to calculate
+                # time to CPA to all other (relevant) ships
+                for record_index2 in range(record_index1+1, interval_start 
+                                                            + long_interval_size):
 
-                    # Establishing LAT and LON mean value for correct
-                    # latitude correction value (computed in radians)
-                    LAT_mean = np.pi*(ship2_lat + ship1_lat)/(2*180)
-
-                    # Correcting minimum distance for 
-                    DIST_MIN_CORR = DIST_MIN/np.cos(LAT_mean)
-
-                    # We check wether the two ships are close in LAT
-                    if ship2_lon > ship1_lon + DIST_MIN_CORR:
+                    # Using the fact that the table is sorted by Longitudes to
+                    # break the loop if we have passed by the relevant LON area.
+                    # Passing smaller lons
+                    if (LATs[record_index2] > ship1_lat + DIST_MIN):
+                        break
+                    elif (LATs[record_index2] < ship1_lat - DIST_MIN):
                         pass
-
-                    elif ship2_lon < ship1_lon - DIST_MIN_CORR:
-                        pass
-
                     else:
-                        # Making initial position vectors, in degrees
-                        ship2_pos = np.array([ship2_lon, ship2_lat],
-                                                dtype=np.float32)
+                        # Creating interval index for ship 2
+                        # Establishing LON and LAT for ship 2
+                        ship2_lon = LONs[record_index2]
+                        ship2_lat = LATs[record_index2]
 
-                        # Making initial velocity vectors, measuring in degrees
-                        # per seconds (converting from "speed" in knots)
-                        velocity1 = (speed1
-                                        *np.array([np.sin(angle1),
-                                          np.cos(angle1)],
-                                                    dtype=np.float32))
+                        # Establishing LAT and LON mean value for correct
+                        # latitude correction value (computed in radians)
+                        LAT_mean = np.pi*(ship2_lat + ship1_lat)/(2*180)
 
-                        velocity2 = (SOGs[record_index2]
-                                        *np.array([np.sin(COGs[record_index2]),
-                                          np.cos(COGs[record_index2])],
-                                                    dtype=np.float32))
+                        # Correcting minimum distance for 
+                        DIST_MIN_CORR = DIST_MIN/np.cos(LAT_mean)
 
-                        # Calculating initial distance and crossing velocities
-                        # (evolution in distance between ships in plane)
-                        distance_at_zero = ship1_pos - ship2_pos
-                        cross_velocities = velocity1 - velocity2
+                        # We check wether the two ships are close in LAT
+                        if ship2_lon > ship1_lon + DIST_MIN_CORR:
+                            pass
 
-                        # Correcting distances and velocities in LON direction 
-                        # for the mean latitude skewness 
-                        distance_at_zero[0] = (distance_at_zero[0]
-                                                *np.cos(LAT_mean))
-                        cross_velocities[0] = (cross_velocities[0]
-                                                *np.cos(LAT_mean))
-
-                        # Calculating the squared norm of the CV for future use
-                        cross_velocity_squared_norm = (
-                                 (cross_velocities[0])*(cross_velocities[0])
-                               + (cross_velocities[1])*(cross_velocities[1]))
-
-                        # Setting time_to_CPA as 0 if ships have identical 
-                        # velocities or negative evolution in distance in 
-                        # both directions. Calculating Time to CPA if not.
-                        if (cross_velocity_squared_norm < TOL):
-                            time_to_CPA = 0
+                        elif ship2_lon < ship1_lon - DIST_MIN_CORR:
+                            pass
 
                         else:
-                            time_to_CPA = -(
-                                (distance_at_zero[0]*cross_velocities[0]
-                                + distance_at_zero[1]*cross_velocities[1])
-                                / cross_velocity_squared_norm)
+                            # Making initial position vectors, in degrees
+                            ship2_pos = np.array([ship2_lon, ship2_lat],
+                                                    dtype=np.float32)
 
-                            # Converting to seconds by formula from
-                            # Azzeddine
-                            time_to_CPA_sec = (time_to_CPA 
-                                                *METERS_DEGREES_CONVERSION 
-                                                / 0.514444)
+                            # Making initial velocity vectors, measuring in degrees
+                            # per seconds (converting from "speed" in knots)
+                            velocity1 = (speed1
+                                            *np.array([np.sin(angle1),
+                                              np.cos(angle1)],
+                                                        dtype=np.float32))
 
-                        # Setting CPA negative if ships are heading in opposite 
-                        # directions (time_to_CPA is negative), zero or above 
-                        # 20 minutes. Calculating CPA if not.
-                        if (time_to_CPA_sec < TOL or time_to_CPA_sec > (40*60)):
-                            distance_to_CPA = -1.0
+                            velocity2 = (SOGs[record_index2]
+                                            *np.array([np.sin(COGs[record_index2]),
+                                              np.cos(COGs[record_index2])],
+                                                        dtype=np.float32))
 
-                        else:
-                            distvec = (distance_at_zero 
-                                    + time_to_CPA*cross_velocities)
+                            # Calculating initial distance and crossing velocities
+                            # (evolution in distance between ships in plane)
+                            distance_at_zero = ship1_pos - ship2_pos
+                            cross_velocities = velocity1 - velocity2
 
-                            distance_to_CPA = np.sqrt(distvec[0]*distvec[0]
-                                                    + distvec[1]*distvec[1])
+                            # Correcting distances and velocities in LON direction 
+                            # for the mean latitude skewness 
+                            distance_at_zero[0] = (distance_at_zero[0]
+                                                    *np.cos(LAT_mean))
+                            cross_velocities[0] = (cross_velocities[0]
+                                                    *np.cos(LAT_mean))
 
-                        # Saving relevant values in ship 1 collection array
-                        tCPA_ship_1[record_index2 - interval_start] = (
-                                                    np.float32(time_to_CPA_sec))
-                        CPA_ship_1[record_index2 - interval_start] = ( 
-                                                    np.float32(distance_to_CPA))
+                            # Calculating the squared norm of the CV for future use
+                            cross_velocity_squared_norm = (
+                                     (cross_velocities[0])*(cross_velocities[0])
+                                   + (cross_velocities[1])*(cross_velocities[1]))
 
-            # Creating filter for whether ship 1 has any relevant time_to_CPA
-            # situations
-            tCPA_relevant_filter = tCPA_ship_1 > 0
+                            # Setting time_to_CPA as 0 if ships have identical 
+                            # velocities or negative evolution in distance in 
+                            # both directions. Calculating Time to CPA if not.
+                            if (cross_velocity_squared_norm < TOL):
+                                time_to_CPA = 0
 
-            # Using filter to only save if there are relevant situtations
-            if np.any(tCPA_relevant_filter):
+                            else:
+                                time_to_CPA = -(
+                                    (distance_at_zero[0]*cross_velocities[0]
+                                    + distance_at_zero[1]*cross_velocities[1])
+                                    / cross_velocity_squared_norm)
 
-                # Creating candidates with the filters so that the 
-                # we are not taking the minimum of zero or negative values
-                # and so that min_tCPA_ind will work as index in CPA_dist
-                min_tCPA_candidates = tCPA_ship_1[tCPA_relevant_filter]
-                min_CPAdist_candidates = CPA_ship_1[tCPA_relevant_filter]
+                                # Converting to seconds by formula from
+                                # Azzeddine
+                                time_to_CPA_sec = (time_to_CPA 
+                                                    *METERS_DEGREES_CONVERSION 
+                                                    / 0.514444)
 
-                # Creating indices list in order to be able to get correct
-                # index number by min_tCPA_ind
-                Indices_candidates = Indices[Intervals == interval]
-                Indices_candidates = Indices_candidates[tCPA_relevant_filter]
+                            # Setting CPA negative if ships are heading in opposite 
+                            # directions (time_to_CPA is negative), zero or above 
+                            # 20 minutes. Calculating CPA if not.
+                            if (time_to_CPA_sec < TOL or time_to_CPA_sec > (40*60)):
+                                distance_to_CPA = -1.0
 
-                # Finding the index for the minimum tCPA
-                min_tCPA_ind = np.argmin(min_tCPA_candidates)
+                            else:
+                                distvec = (distance_at_zero 
+                                        + time_to_CPA*cross_velocities)
 
-                # Collecting relevant data for the smallest-time-to-CPA 
-                # incidence in the global function collection arrays
-                CPA_time[record_index1] = np.float32(
-                                        min_tCPA_candidates[min_tCPA_ind])
-                
-                CPA_dist[record_index1] = np.float32(
-                                        min_CPAdist_candidates[min_tCPA_ind])
-                
-                Indices_mins[record_index1] = np.uint32(
-                                        Indices_candidates[min_tCPA_ind])
+                                distance_to_CPA = np.sqrt(distvec[0]*distvec[0]
+                                                        + distvec[1]*distvec[1])
+
+                            # Saving relevant values in ship 1 collection array
+                            tCPA_ship_1[record_index2 - interval_start] = (
+                                                        np.float32(time_to_CPA_sec))
+                            CPA_ship_1[record_index2 - interval_start] = ( 
+                                                        np.float32(distance_to_CPA))
+
+                # Creating filter for whether ship 1 has any relevant time_to_CPA
+                # situations
+                tCPA_relevant_filter = tCPA_ship_1 > 0
+
+                # Using filter to only save if there are relevant situtations
+                if np.any(tCPA_relevant_filter):
+
+                    # Creating candidates with the filters so that the 
+                    # we are not taking the minimum of zero or negative values
+                    # and so that min_tCPA_ind will work as index in CPA_dist
+                    min_tCPA_candidates = tCPA_ship_1[tCPA_relevant_filter]
+                    min_CPAdist_candidates = CPA_ship_1[tCPA_relevant_filter]
+
+                    # Creating indices list in order to be able to get correct
+                    # index number by min_tCPA_ind
+                    Indices_candidates = Indices[Intervals == interval]
+                    Indices_candidates = Indices_candidates[tCPA_relevant_filter]
+
+                    # Finding the index for the minimum tCPA
+                    min_tCPA_ind = np.argmin(min_tCPA_candidates)
+
+                    # Collecting relevant data for the smallest-time-to-CPA 
+                    # incidence in the global function collection arrays
+                    CPA_time[record_index1] = np.float32(
+                                            min_tCPA_candidates[min_tCPA_ind])
+                    
+                    CPA_dist[record_index1] = np.float32(
+                                            min_CPAdist_candidates[min_tCPA_ind])
+                    
+                    Indices_mins[record_index1] = np.uint32(
+                                            Indices_candidates[min_tCPA_ind])
 
 
     return (IDs,
@@ -541,7 +569,8 @@ def observation_synchronizer(whole_table,
                             LATcolname = "LAT",
                             LONcolname = "LON",
                             lencolname = "Length",
-                            Headcolname = "Heading"
+                            widthcolname = "Width",
+                            daycolname = "Day"
                             ):
     """
     Function for synchronizing observations in near-collision avoidance 
@@ -553,6 +582,9 @@ def observation_synchronizer(whole_table,
     Output: Table of record-pairs for each point in time, with synced time
     scale.
     """
+
+    if "Interval" in whole_table.columns:
+        whole_table.drop(columns = ["Interval"], inplace = True)
 
     # Create collector tables for situation tables
     tablecollector1 = []
@@ -621,10 +653,11 @@ def observation_synchronizer(whole_table,
                     catcolname: "Category_1",
                     LATcolname: "LAT_1",
                     LONcolname: "LON_1",
-                    Headcolname: "Heading_1",
                     lencolname: "Length_1",
+                    widthcolname: "Width_1",
                     sitcolname: "Situations_1",
-                    datetimcol: "Time_datetime_1"
+                    datetimcol: "Time_datetime_1",
+                    daycolname: "Day_1"
                     },axis="columns",
                     inplace=True)
 
@@ -636,10 +669,11 @@ def observation_synchronizer(whole_table,
                     catcolname: "Category_2",
                     LATcolname: "LAT_2",
                     LONcolname: "LON_2",
-                    Headcolname: "Heading_2",
                     lencolname: "Length_2",
+                    widthcolname: "Width_2",
                     sitcolname: "Situations_2",
-                    datetimcol: "Time_datetime_2"
+                    datetimcol: "Time_datetime_2",
+                    daycolname: "Day_2"
                     },axis="columns",
                     inplace=True)
 
@@ -657,12 +691,13 @@ def observation_synchronizer(whole_table,
 
     # Setting the order in the new output merged table
     newcolorder = ["ID_1","ID_2","MT_datetime","LAT_1","LAT_2",
-                    "LON_1","LON_2","COG_1","Heading_1","COG_2",
+                    "LON_1","LON_2","COG_1","COG_2",
                     "Time_1","Time_2","Time_datetime_1",
-                    "Time_datetime_2","Merge_times","Heading_2",
+                    "Time_datetime_2","Merge_times",
                     "SOG_1","SOG_2","Status_1","Status_2",
                     "Category_1","Category_2","Length_1","Length_2",
-                    "Situations_1","Situations_2"]
+                    "Width_1","Width_2",
+                    "Situations_1","Situations_2", "Day_1", "Day_2"]
 
     # Reindexing by the new column order
     outtable = outtable.reindex(newcolorder, axis = "columns",copy=False)
@@ -675,6 +710,8 @@ def observation_synchronizer(whole_table,
     outtable["Status_2"] = outtable["Status_2"].astype(np.uint32)
     outtable["Situations_1"] = outtable["Situations_1"].astype(np.uint32)   
     outtable["Situations_2"] = outtable["Situations_2"].astype(np.uint32)   
+    outtable["Day_1"] = outtable["Day_1"].astype(np.uint32)   
+    outtable["Day_2"] = outtable["Day_2"].astype(np.uint32)   
 
     return outtable
 
@@ -1104,6 +1141,8 @@ def statistics_aggregator(whole_table,
                     COGcolname2 = "COG_2",
                     LENcolname1 = "Length_1",
                     LENcolname2 = "Length_2",
+                    WIDcolname1 = "Width_1",
+                    WIDcolname2 = "Width_2",
                     LONcolname1 = "LON_1",
                     LONcolname2 = "LON_2",
                     LATcolname1 = "LAT_1",
@@ -1117,7 +1156,9 @@ def statistics_aggregator(whole_table,
                     disttoCPAname1 = "Distance_to_CPA_1",
                     disttoCPAname2 = "Distance_to_CPA_2",
                     catcolname1 = "Category_1",
-                    catcolname2 = "Category_2"
+                    catcolname2 = "Category_2",
+                    daycolname1 = "Day_1",
+                    daycolname2 = "Day_2"
                     ):
     """
     Function to produce a table of summary statistics for each situation 
@@ -1131,6 +1172,8 @@ def statistics_aggregator(whole_table,
     # Resetting index in order to make sure indexing works as it should
     whole_table = whole_table.sort_values([sitcolname,timemergedcolname])
     whole_table = whole_table.reset_index(drop=True)
+
+    day_num = whole_table[daycolname1][0]
 
     # Calling workhorse function
     (sitnum, recnum, t1_inds ,tF_inds ,t1s, tFs, tMs,
@@ -1177,9 +1220,11 @@ def statistics_aggregator(whole_table,
         np.asarray(whole_table[catcolname2])
         ))
 
+    daycol = np.ones(len(sitnum), dtype = np.uint32)*day_num
+
     # Creating new output table (optional columns included in comments)
     outtable = pd.DataFrame({
-            'Situation':sitnum, 'Records':recnum, 
+            'Situation':sitnum, 'Day': daycol, 'Records':recnum, 
             'Yield_start_record': t1_inds ,'Yield_finish_record': tF_inds,
             'ID_1': ID1s, 'ID_2': ID2s,"Category_1":Cat1, "Category_2":Cat2,
             'Start':t1s,'Finish' :tFs,'Midpoint':tMs,
@@ -1222,7 +1267,7 @@ def statistics_aggregator(whole_table,
             'Coursechange_2_overshoot_alt': COG_alt_overshoot2,
             'Speedchange_1_overshoot_alt': SOG_alt_overshoot1, 
             'Speedchange_2_overshoot_alt': SOG_alt_overshoot2},
-            columns=['Situation','Records',
+            columns=['Situation', 'Day', 'Records',
                     'Yield_start_record', 'Yield_finish_record',
                     'Start','Midpoint','Finish' ,
                     'Time_spent','Seconds_spent',
@@ -1263,7 +1308,8 @@ def statistics_aggregator(whole_table,
     # somewhat arbitrary)
     outtable = outtable[outtable.Start != 0]
     outtable = outtable[outtable.ID_1 != 0]
-    
+    outtable = outtable[(outtable.Yield_finish_record - outtable.Yield_start_record) >= 8]
+
     # Converting time point values in integers (seconds) to datetime objects
     outtable.Start = pd.to_datetime(
                         outtable.Start*10**9).dt.floor('s')
@@ -1407,9 +1453,10 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
 
             # Filtering is now implemented through vessel lengths instead
             # of an absolute filter on meters (i.e. 400 m)
-            elif (CPAdist_sit > 3*(Length1s[situation_filter][0] + Length2s[situation_filter][0])).all():
+            #elif (CPAdist_sit > 3*(Length1s[situation_filter][0] + Length2s[situation_filter][0])).all():
+            #    pass
+            elif (CPAdist_sit > 400).all():
                 pass
-
             else:
                 ### Finding time intervals ###
 
@@ -1481,7 +1528,12 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                 if (np.sum(np.logical_and(Mergetime_sit >= t1 , 
                                         Mergetime_sit <= tM)) <= 2):
                     pass
-
+                elif (tF_ind - t1_ind) <= 5:
+                    pass
+                elif (t1_ind - 5) <= 0:
+                    pass
+                elif (tF_ind + 5 >= len(Mergetime_sit)):
+                    pass
                 else:
 
                     # Collecting IDs and categories. The main function uses this
@@ -1542,7 +1594,7 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
 
                     vesseldist_at_yield_collector[situation] = (
                         geopy.distance.distance(Coords_Vessel_1, 
-                                                Coords_Vessel_2).km)
+                                                Coords_Vessel_2).km)*1000
 
                     ### Categorizing situations in COLREGs ###
 
@@ -1639,19 +1691,17 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                     ### Calculating steady-state change in speed and course ###
 
                     # Collecting absolute changes in steady-state speed
-                    steady_SOG1_change_collector[situation] = (mean_SOG1_post 
+                    steady_SOG1_change_collector[situation] = np.abs(mean_SOG1_post 
                                                                 - mean_SOG1_pre)
-                    steady_SOG2_change_collector[situation] = (mean_SOG2_post 
+                    steady_SOG2_change_collector[situation] = np.abs(mean_SOG2_post 
                                                                 - mean_SOG2_pre)
 
                     # Collecting absolute changes in steady-state course
-                    steady_COG1_change_collector[situation] = np.abs(
-                                        mean_COG1_post 
-                                        - mean_COG1_pre)
+                    steady_COG1_change_collector[situation] = min(
+                                        (mean_COG1_post - mean_COG1_pre) % 360, (mean_COG1_pre - mean_COG1_post) % 360)
 
-                    steady_COG2_change_collector[situation] = np.abs(
-                                        mean_COG2_post 
-                                        - mean_COG2_pre)
+                    steady_COG2_change_collector[situation] = min(
+                                        (mean_COG2_post - mean_COG2_pre) % 360, (mean_COG2_pre - mean_COG2_post) % 360)
 
 
                     ### Calculating approach speed ###
@@ -1750,11 +1800,11 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
 
                     # Finding mean differentiated COG and SOG before yield 
                     # maneuver
-                    if Mergetime_sit[range(max(0,t1_ind-60),t1_ind)].size > 10:
-                        mean_dCOG1_pre = np.mean(dCOG1s_sit[range(max(0,t1_ind-60),t1_ind)])
-                        mean_dCOG2_pre = np.mean(dCOG2s_sit[range(max(0,t1_ind-60),t1_ind)])
-                        mean_dSOG1_pre = np.mean(dSOG1s_sit[range(max(0,t1_ind-60),t1_ind)])
-                        mean_dSOG2_pre = np.mean(dSOG2s_sit[range(max(0,t1_ind-60),t1_ind)])
+                    if max(0,t1_ind-60) > 10:
+                        mean_dCOG1_pre = np.mean(np.abs(dCOG1s_sit[range(max(0,t1_ind-60),t1_ind)]))
+                        mean_dCOG2_pre = np.mean(np.abs(dCOG2s_sit[range(max(0,t1_ind-60),t1_ind)]))
+                        mean_dSOG1_pre = np.mean(np.abs(dSOG1s_sit[range(max(0,t1_ind-60),t1_ind)]))
+                        mean_dSOG2_pre = np.mean(np.abs(dSOG2s_sit[range(max(0,t1_ind-60),t1_ind)]))
 
                     # Saving the largest dSOGs and dCOGs
                     max_dCOG1_collector[situation] = max_dCOG1_pre
@@ -1779,25 +1829,6 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                                             Mergetime_sit >= t1 , 
                                             Mergetime_sit <= tF)]
 
-
-
-                                ### OLD ####
-                    # # Retrieving dSOGs and dCOGs for the yielding interval
-                    # dCOG1s_int = dCOG1s_sit[np.logical_and(
-                    #                         Mergetime_sit >= t1 , 
-                    #                         Mergetime_sit <= tF)]
-                    
-                    # dCOG2s_int = dCOG2s_sit[np.logical_and(
-                    #                         Mergetime_sit >= t1 , 
-                    #                         Mergetime_sit <= tF)]
-                    
-                    # dSOG1s_int = dSOG1s_sit[np.logical_and(
-                    #                         Mergetime_sit >= t1 , 
-                    #                         Mergetime_sit <= tF)]
-                    
-                    # dSOG2s_int = dSOG2s_sit[np.logical_and(
-                    #                         Mergetime_sit >= t1 , 
-                    #                         Mergetime_sit <= tF)]
 
                     # Collecting max overshoot (or if no overshoot, the max
                     # non-overshoot proportion of dSOG to dCOG)
@@ -1866,19 +1897,19 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                     # yielding maneuver started
                     if len(dCOG1s_int) > 0:
                         COG_maneuver1_collector[situation] = np.any(
-                                            dCOG1s_int > max_dCOG1_pre)
+                                            dCOG1s_int > 1.25*max_dCOG1_pre)
 
                     if len(dCOG2s_int) > 0:
                         COG_maneuver2_collector[situation] = np.any(
-                                            dCOG2s_int > max_dCOG2_pre)
+                                            dCOG2s_int > 1.25*max_dCOG2_pre)
 
                     if len(dSOG1s_int) > 0:
                         SOG_maneuver1_collector[situation] = np.any(
-                                            np.abs(dSOG1s_int) > max_dSOG1_pre)
+                                            np.abs(dSOG1s_int) > 1.25*max_dSOG1_pre)
 
                     if len(dSOG2s_int) > 0:
                         SOG_maneuver2_collector[situation] = np.any(
-                                            np.abs(dSOG2s_int) > max_dSOG2_pre)
+                                            np.abs(dSOG2s_int) > 1.25*max_dSOG2_pre)
             
 
                     # Stamping ship 1 and 2 with "True" if they had a maximum
@@ -1888,19 +1919,19 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
 
                         if len(dCOG1s_int) > 0:
                             COG_alt_maneuver1_collector[situation] = np.any(
-                                                dCOG1s_int > mean_dCOG1_pre)
+                                                dCOG1s_int > 1.25*mean_dCOG1_pre)
 
                         if len(dCOG2s_int) > 0:
                             COG_alt_maneuver2_collector[situation] = np.any(
-                                                dCOG2s_int > mean_dCOG2_pre)
+                                                dCOG2s_int > 1.25*mean_dCOG2_pre)
 
                         if len(dSOG1s_int) > 0:
                             SOG_alt_maneuver1_collector[situation] = np.any(
-                                                np.abs(dSOG1s_int) > mean_dSOG1_pre)
+                                                np.abs(dSOG1s_int) > 1.25*mean_dSOG1_pre)
 
                         if len(dSOG2s_int) > 0:
                             SOG_alt_maneuver2_collector[situation] = np.any(
-                                                np.abs(dSOG2s_int) > mean_dSOG2_pre)
+                                                np.abs(dSOG2s_int) > 1.25*mean_dSOG2_pre)
 
 
                                 ### OLD VERSION ###
@@ -1994,7 +2025,6 @@ def compute_nearcollision_statistics(
                             "Time": "Time",
                             "COG": "COG",
                             "SOG": "SOG",
-                            "Heading": "Heading",
                             "LON": "LON",
                             "LAT": "LAT",
                             "Status": "Status",
@@ -2006,7 +2036,6 @@ def compute_nearcollision_statistics(
                               "lon":        "LON",
                               "lat":        "LAT",
                               "nav_status": "Status",
-                              "true_heading": "Heading",
                               "sog":        "SOG",
                               "cog":        "COG",
                               "length":     "Length"
