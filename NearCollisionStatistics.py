@@ -256,7 +256,7 @@ def _CPA_calculator_workhorse(IDs, LATs, LONs, DateTimes,
     # Iterating over intervals for interval-wise calculations
     # (written to be implemented with parallellism)
     for interval in numba.prange(first_interval,
-                        first_interval + max(interval_numbers)):
+                        first_interval + len(interval_numbers)):
 
         # Calculating interval size
         interval_start = np.uint32(np.sum(Intervals < interval))
@@ -1805,6 +1805,11 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                         mean_dCOG2_pre = np.mean(np.abs(dCOG2s_sit[range(max(0,t1_ind-60),t1_ind)]))
                         mean_dSOG1_pre = np.mean(np.abs(dSOG1s_sit[range(max(0,t1_ind-60),t1_ind)]))
                         mean_dSOG2_pre = np.mean(np.abs(dSOG2s_sit[range(max(0,t1_ind-60),t1_ind)]))
+                    else:
+                        mean_dCOG1_pre = 0
+                        mean_dCOG2_pre = 0
+                        mean_dSOG1_pre = 0
+                        mean_dSOG2_pre = 0
 
                     # Saving the largest dSOGs and dCOGs
                     max_dCOG1_collector[situation] = max_dCOG1_pre
@@ -1860,7 +1865,7 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
 
                     # Collecting max overshoot (or if no overshoot, the max
                     # non-overshoot proportion of dSOG to dCOG)
-                    if Mergetime_sit[range(max(0,t1_ind-60),t1_ind)].size > 10:
+                    if max(0,t1_ind-60) > 10:
 
                         if mean_dCOG1_pre > TOL:
                             COG_alt_overshoot1_collector[situation] = np.max(
@@ -1898,63 +1903,57 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                     if len(dCOG1s_int) > 0:
                         COG_maneuver1_collector[situation] = np.any(
                                             dCOG1s_int > 1.25*max_dCOG1_pre)
+                    else:
+                        COG_maneuver1_collector[situation] = 0
 
                     if len(dCOG2s_int) > 0:
                         COG_maneuver2_collector[situation] = np.any(
                                             dCOG2s_int > 1.25*max_dCOG2_pre)
+                    else:
+                        COG_maneuver2_collector[situation] = 0
 
                     if len(dSOG1s_int) > 0:
                         SOG_maneuver1_collector[situation] = np.any(
                                             np.abs(dSOG1s_int) > 1.25*max_dSOG1_pre)
+                    else:
+                        SOG_maneuver1_collector[situation] = 0
 
                     if len(dSOG2s_int) > 0:
                         SOG_maneuver2_collector[situation] = np.any(
                                             np.abs(dSOG2s_int) > 1.25*max_dSOG2_pre)
-            
+
+                    else:
+                        SOG_maneuver2_collector[situation] = 0
 
                     # Stamping ship 1 and 2 with "True" if they had a maximum
                     # dSOG and dCOG exceeding the mean before the yield maneuver
                     # started
-                    if Mergetime_sit[range(max(0,t1_ind-60),t1_ind)].size > 10:
+                    if max(0,t1_ind-60) > 10:
 
                         if len(dCOG1s_int) > 0:
                             COG_alt_maneuver1_collector[situation] = np.any(
                                                 dCOG1s_int > 1.25*mean_dCOG1_pre)
+                        else:
+                            COG_alt_maneuver1_collector[situation] = 0
 
                         if len(dCOG2s_int) > 0:
                             COG_alt_maneuver2_collector[situation] = np.any(
                                                 dCOG2s_int > 1.25*mean_dCOG2_pre)
+                        else:
+                            COG_alt_maneuver2_collector[situation] = 0
 
                         if len(dSOG1s_int) > 0:
                             SOG_alt_maneuver1_collector[situation] = np.any(
                                                 np.abs(dSOG1s_int) > 1.25*mean_dSOG1_pre)
+                        else:
+                            SOG_alt_maneuver1_collector[situation] = 0
 
                         if len(dSOG2s_int) > 0:
                             SOG_alt_maneuver2_collector[situation] = np.any(
                                                 np.abs(dSOG2s_int) > 1.25*mean_dSOG2_pre)
+                        else:
+                            SOG_alt_maneuver2_collector[situation] = 0
 
-
-                                ### OLD VERSION ###
-                    # Stamping ship 1 and 2 with "True" if they had a maximum
-                    # dSOG and dCOG exceeding the mean before the yield maneuver
-                    # started
-                    # if np.any((Mergetime_sit <= t1)&(Mergetime_sit >= t1 - 60)):
-
-                    #     if len(dCOG1s_int) > 0:
-                    #         COG_alt_maneuver1_collector[situation] = np.any(
-                    #                             dCOG1s_int > mean_dCOG1_pre)
-
-                    #     if len(dCOG2s_int) > 0:
-                    #         COG_alt_maneuver2_collector[situation] = np.any(
-                    #                             dCOG2s_int > mean_dCOG2_pre)
-
-                    #     if len(dSOG1s_int) > 0:
-                    #         SOG_alt_maneuver1_collector[situation] = np.any(
-                    #                             np.abs(dSOG1s_int) > mean_dSOG1_pre)
-
-                    #     if len(dSOG2s_int) > 0:
-                    #         SOG_alt_maneuver2_collector[situation] = np.any(
-                    #                             np.abs(dSOG2s_int) > mean_dSOG2_pre)
 
     # Returning all records (not neccessarily storing all in final output of
     # main function)
