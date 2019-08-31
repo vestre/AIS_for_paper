@@ -1,4 +1,3 @@
-# README for project
+# AIS for paper
 
-
-This is a short readme for temporary repo for correcting code before pushing for paper in DNV case
+This is improved code from the AIS project, in order to incorporate input before going to paper
