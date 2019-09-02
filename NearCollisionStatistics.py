@@ -561,6 +561,7 @@ def observation_synchronizer(whole_table,
                             timecolname = "Time", 
                             sitcolname = "Situations", 
                             idcolname = "ID",
+                            imocolname = "IMO",
                             statcolname = "Status",
                             SOGcolname = "SOG",
                             COGcolname = "COG",
@@ -647,6 +648,7 @@ def observation_synchronizer(whole_table,
     # Renaming columns for both concatenated tables
     out1.rename({timecolname: "Time_1",
                     idcolname: "ID_1",
+                    imocolname: "IMO_1",
                     statcolname: "Status_1",
                     COGcolname: "COG_1",
                     SOGcolname: "SOG_1",
@@ -663,6 +665,7 @@ def observation_synchronizer(whole_table,
 
     out2.rename({timecolname: "Time_2",
                     idcolname: "ID_2",
+                    imocolname: "IMO_2",
                     statcolname: "Status_2",
                     COGcolname: "COG_2",
                     SOGcolname: "SOG_2",
@@ -696,7 +699,7 @@ def observation_synchronizer(whole_table,
                     "Time_datetime_2","Merge_times",
                     "SOG_1","SOG_2","Status_1","Status_2",
                     "Category_1","Category_2","Length_1","Length_2",
-                    "Width_1","Width_2",
+                    "Width_1","Width_2","IMO_1","IMO_2",
                     "Situations_1","Situations_2", "Day_1", "Day_2"]
 
     # Reindexing by the new column order
@@ -1192,7 +1195,7 @@ def statistics_aggregator(whole_table,
             SOG_alt_maneuver1, SOG_alt_maneuver2,
             COG_alt_overshoot1, COG_alt_overshoot2,
             SOG_alt_overshoot1, SOG_alt_overshoot2,
-            ID1s, ID2s, Cat1, Cat2) = (
+            ID1s, ID2s, Cat1, Cat2, Len1, Len2) = (
             _aggregator_workhorse(
         np.asarray(whole_table[idcolname1]),
         np.asarray(whole_table[idcolname2]),
@@ -1229,6 +1232,7 @@ def statistics_aggregator(whole_table,
             'ID_1': ID1s, 'ID_2': ID2s,"Category_1":Cat1, "Category_2":Cat2,
             'Start':t1s,'Finish' :tFs,'Midpoint':tMs,
             'Time_spent': delTimes, 'Seconds_spent':delTimes,
+            'Length_1': Len1, 'Length_2': Len2,
             #'Mean_SOG_1': meanSOG1,'Mean_SOG_2': meanSOG2,
             #'Mean_COG_1': meanCOG1,'Mean_COG_2': meanCOG2,
             'LAT_1_at_t1': LAT1_t1, 
@@ -1272,6 +1276,7 @@ def statistics_aggregator(whole_table,
                     'Start','Midpoint','Finish' ,
                     'Time_spent','Seconds_spent',
                     'ID_1','ID_2','Category_1','Category_2',
+                    'Length_1','Length_2',
                     #'Mean_SOG_1', 'Mean_SOG_2',
                     #'Mean_COG_1', 'Mean_COG_2', 
                     'Crossing_angle', 
@@ -1426,6 +1431,9 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
     Cat1_collector1 = np.zeros(number_of_sits,dtype = np.uint32)
     Cat1_collector2 = np.zeros(number_of_sits,dtype = np.uint32)
 
+    Length_collector1 = np.zeros(number_of_sits,dtype = np.float64)
+    Length_collector2 = np.zeros(number_of_sits,dtype = np.float64)
+
     # Looping through all situations
     for situation in range(first_situation, first_situation + number_of_sits):
 
@@ -1450,13 +1458,15 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
             # where Time to CPA is negative throughout the situation interval
             if (tCPA_sit<=0).all():
                 pass
-
+            elif (np.isnan(Length1s[(situation_filter)]).all()) or (np.isnan(Length2s[(situation_filter)]).all()) and (CPAdist_sit > 400).all():
+                pass
             # Filtering is now implemented through vessel lengths instead
             # of an absolute filter on meters (i.e. 400 m)
-            #elif (CPAdist_sit > 3*(Length1s[situation_filter][0] + Length2s[situation_filter][0])).all():
-            #    pass
-            elif (CPAdist_sit > 400).all():
+            # or: ((((~np.isnan(Length1s)).any()) and ((~np.isnan(Length2s).any())))
+            elif ((((~np.isnan(Length1s[(situation_filter)])).any()) and ((~np.isnan(Length2s[(situation_filter)]).any()))) and (CPAdist_sit > 3*(Length1s[(situation_filter)&(~np.isnan(Length1s))][0] + Length2s[(situation_filter)&(~np.isnan(Length2s))][0])).all()):
                 pass
+            #elif (CPAdist_sit > 400).all():
+            #    pass
             else:
                 ### Finding time intervals ###
 
@@ -1549,6 +1559,11 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
                     
                     Cat1_collector2[situation] = np.unique(
                                     Category2[situation_filter])[0]
+
+                    Length_collector1[situation] = np.unique(
+                                    Length1s[situation_filter])[0]
+                    Length_collector2[situation] = np.unique(
+                                    Length2s[situation_filter])[0]
 
                     # Finding the time spent in the yielding maneuver
                     deltaTime = tF - t1
@@ -2011,7 +2026,9 @@ def _aggregator_workhorse(ID1s, ID2s, LAT1s, LAT2s, LON1s, LON2s, Mergetimes,
             ID_collector1,
             ID_collector2,
             Cat1_collector1,
-            Cat1_collector2
+            Cat1_collector2,
+            Length_collector1,
+            Length_collector2
             )
 
 
